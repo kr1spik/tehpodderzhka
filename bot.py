@@ -1,30 +1,28 @@
 import telebot
 from telebot import types, apihelper
 import time
-from config import TOKEN
+from config import TOKEN, ADMIN_IDS
 import logic
+import note
+import admin
+import ui
 
 apihelper.CONNECT_TIMEOUT = 30
 apihelper.READ_TIMEOUT = 30
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-def get_main_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("❓ Помощь (FAQ)", "🛠 Поддержка")
-    return markup
-
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.clear_step_handler_by_chat_id(chat_id=message.chat.id)
     logic.init_db()
-    welcome_text = f"<b>Привет, {message.from_user.first_name}!</b>\nЯ бот поддержки магазина 'Продаем все на свете'."
-    bot.send_message(message.chat.id, welcome_text, reply_markup=get_main_keyboard())
+    welcome_text = f"<b>Привет, {message.from_user.first_name}!</b>\nЯ бот поддержки магазина."
+    bot.send_message(message.chat.id, welcome_text, reply_markup=ui.get_main_keyboard(message.from_user.id))
 
 @bot.message_handler(commands=['cancel'])
 def cancel(message):
     bot.clear_step_handler_by_chat_id(chat_id=message.chat.id)
-    bot.send_message(message.chat.id, "❌ Действие отменено. Вы вернулись в главное меню.", reply_markup=get_main_keyboard())
+    bot.send_message(message.chat.id, "❌ Действие отменено.", reply_markup=ui.get_main_keyboard(message.from_user.id))
 
 @bot.message_handler(func=lambda m: m.text == "❓ Помощь (FAQ)")
 def show_faq(message):
@@ -54,7 +52,7 @@ def contact_support(message):
     markup.add(
         types.InlineKeyboardButton("💻 Программисты", callback_data="sup_dev"),
         types.InlineKeyboardButton("📦 Отдел продаж", callback_data="sup_sales"),
-        types.InlineKeyboardButton("🚫 Отмена/Изменение заказа", callback_data="sup_cancel"),
+        types.InlineKeyboardButton("🚫 Отмена заказа", callback_data="sup_cancel"),
         types.InlineKeyboardButton("🔄 Возврат товара", callback_data="sup_return"),
         types.InlineKeyboardButton("🤝 Сотрудничество", callback_data="sup_b2b")
     )
@@ -63,51 +61,42 @@ def contact_support(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sup_'))
 def ask_issue(call):
     bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
-    depts = {
-        "sup_dev": "Программисты",
-        "sup_sales": "Отдел продаж",
-        "sup_return": "Возврат товара",
-        "sup_cancel": "Отмена заказа",
-        "sup_b2b": "Сотрудничество"
-    }
+    depts = {"sup_dev": "Программисты", "sup_sales": "Отдел продаж", "sup_return": "Возврат товара", "sup_cancel": "Отмена заказа", "sup_b2b": "Сотрудничество"}
     dept_name = depts.get(call.data)
     
     cancel_markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     cancel_markup.add(types.KeyboardButton("❌ Отмена"))
     
-    msg = bot.send_message(call.message.chat.id, f"<b>Отдел: {dept_name}</b>\nНапишите ваше обращение или нажмите кнопку отмены:", reply_markup=cancel_markup)
+    msg = bot.send_message(call.message.chat.id, f"<b>Отдел: {dept_name}</b>\nНапишите ваше обращение:", reply_markup=cancel_markup)
     bot.register_next_step_handler(msg, finalize_ticket, dept_name)
     bot.answer_callback_query(call.id)
 
 def finalize_ticket(message, dept):
     if message.text == "❌ Отмена":
-        bot.send_message(message.chat.id, "Заявка отменена.", reply_markup=get_main_keyboard())
+        bot.send_message(message.chat.id, "Заявка отменена.", reply_markup=ui.get_main_keyboard(message.from_user.id))
         return
 
-    if not message.text:
-        bot.send_message(message.chat.id, "❌ Нужно отправить текст.")
-        return
-
-    success = logic.save_ticket(message.from_user.id, message.from_user.username, message.from_user.first_name, dept, message.text)
-    bot.send_message(message.chat.id, "✅ Заявка принята!", reply_markup=get_main_keyboard())
+    ticket_id = logic.save_ticket(message.from_user.id, message.from_user.username, message.from_user.first_name, dept, message.text)
+    
+    if ticket_id:
+        bot.send_message(message.chat.id, "✅ Заявка принята!", reply_markup=ui.get_main_keyboard(message.from_user.id))
+        note.send_new_ticket_notification(bot, ticket_id, message.from_user.first_name, dept, message.text)
+    else:
+        bot.send_message(message.chat.id, "❌ Ошибка базы.", reply_markup=ui.get_main_keyboard(message.from_user.id))
 
 if __name__ == "__main__":
     logic.init_db()
-    
+    admin.register_admin_handlers(bot) # Регистрация админских функций
+
     try:
-        bot_info = bot.get_me()
-        print(f"--- Бот успешно запущен! ---")
-        print(f"Имя бота: {bot_info.first_name}")
-        print(f"Username: @{bot_info.username}")
-        print(f"ID: {bot_info.id}")
-        print(f"Статус: Ожидание сообщений...")
-        print(f"----------------------------")
+        info = bot.get_me()
+        print(f"--- Бот @{info.username} запущен! ---")
     except Exception as e:
-        print(f"Ошибка при получении данных о боте: {e}")
+        print(f"Ошибка запуска: {e}")
 
     while True:
         try:
             bot.polling(none_stop=True, interval=0, timeout=40)
         except Exception as e:
-            print(f"Сетевая ошибка: {e}. Повторный запуск через 5 секунд...")
+            print(f"Ошибка: {e}")
             time.sleep(5)

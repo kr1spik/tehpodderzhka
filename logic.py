@@ -35,6 +35,21 @@ def save_ticket(user_id, username, first_name, department, issue):
     except Exception as e:
         print(f"Database Error: {e}")
         return False
+    
+def update_ticket_status(ticket_id, new_status):
+    conn = sqlite3.connect('support.db')
+    cursor = conn.cursor()
+    cursor.execute('UPDATE tickets SET status = ? WHERE id = ?', (new_status, ticket_id))
+    conn.commit()
+    conn.close()
+
+def get_ticket_info(ticket_id):
+    conn = sqlite3.connect('support.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id, department, issue FROM tickets WHERE id = ?', (ticket_id,))
+    data = cursor.fetchone()
+    conn.close()
+    return data
 
 FAQ = {
     "доставка": (

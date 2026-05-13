@@ -1,1 +1,3 @@
-TOKEN = 'Ваш Токен'
+TOKEN = 'BOT TOKEN'
+
+ADMIN_IDS = ['Admins ID']
